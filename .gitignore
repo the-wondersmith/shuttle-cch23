@@ -1,0 +1,9 @@
+.actrc
+.idea/
+.cargo/
+target/
+.secrets
+*.profraw
+**/scratch.*
+**/scratch*.*
+rust-toolchain.toml

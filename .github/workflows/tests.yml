@@ -1,0 +1,73 @@
+# yamllint disable rule:line-length
+---
+name: Tests
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit ref to run against
+        required: true
+        type: string
+        default: main
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag, or commit ref to run against
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: " 🧪 "
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust:
+          - beta
+          - stable
+          - nightly
+    timeout-minutes: 45
+    steps:
+      - name: " toolchain"
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt,clippy
+
+      - name: " install tarpaulin"
+        if: ${{ matrix.rust == 'nightly' }}
+        run: cargo +${{ matrix.rust }} install cargo-tarpaulin
+
+      - name: " checkout"
+        uses: actions/checkout@v4
+
+      - name: " format"
+        run: cargo +${{ matrix.rust }} fmt --all -- --check
+
+      - name: " clippy"
+        run: cargo +${{ matrix.rust }} clippy -- -D warnings
+
+      - name: " tests"
+        if: ${{ matrix.rust != 'nightly' }}
+        run: >-
+          cargo +${{ matrix.rust }} test --profile dev
+          --features ci --color always --package cch23-thewondersmith
+
+      - name: " tarpaulin"
+        if: ${{ matrix.rust == 'nightly' }}
+        run: >-
+          cargo tarpaulin --out Stdout --profile dev --engine auto
+          --force-clean --no-dead-code --no-fail-fast --color always
+          --fail-under 75 --packages cch23-thewondersmith
