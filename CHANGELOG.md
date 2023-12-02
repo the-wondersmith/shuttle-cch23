@@ -2,6 +2,10 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## 0.1.0 - 2023-12-02
+
+- - -
+
 ## 0.0.1 - 2023-12-01
 #### Releases
 - complete challenge -1 - (f71e24d) - Mark S
