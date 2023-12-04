@@ -4,13 +4,15 @@ from_latest_tag = false
 ignore_merge_commits = false
 branch_whitelist = [ "main", "release/**" ]
 pre_bump_hooks = [
-    # "cargo doc",
-    # "cargo +nightly tarpaulin --packages cch23-thewondersmith --no-dead-code --no-fail-fast --fail-under=75",
+    "cargo doc",
+    "cargo +nightly tarpaulin --packages cch23-thewondersmith --no-dead-code --no-fail-fast --fail-under=75",
     "cargo build --release --package cch23-thewondersmith",
     "echo 'bumping from {{latest}} to {{version}}'",
     "cargo bump {{version}}",
 ]
-post_bump_hooks = []
+post_bump_hooks = [
+    "cargo shuttle deploy --name cch23-thewondersmith"
+]
 pre_package_bump_hooks = []
 post_package_bump_hooks = []
 
