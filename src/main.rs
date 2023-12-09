@@ -7,8 +7,17 @@
 //! # [`shuttle.rs`](https://shuttle.rs/) Christmas Code Hunt 2023
 //!
 
+// Standard Library Imports
+use core::ops::{Add, BitXor};
+use std::collections::HashMap;
+
 // Third-Party Imports
-use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing, Router};
+use axum::{
+    extract::{Json, Path},
+    http::StatusCode,
+    response::IntoResponse,
+    routing,
+};
 use serde_json::Value;
 
 // Module Declarations
@@ -16,8 +25,11 @@ use serde_json::Value;
 mod tests;
 
 pub mod types;
+pub mod utils;
 
 /// Run the project
+#[cfg_attr(tarpaulin, coverage(off))]
+#[cfg_attr(tarpaulin, tarpaulin::skip)]
 #[tracing::instrument]
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
@@ -26,67 +38,151 @@ async fn main() -> shuttle_axum::ShuttleAxum {
 
 /// Create the project's main `Router` instance
 #[tracing::instrument]
-pub fn router() -> Router {
-    Router::new()
+pub fn router() -> routing::Router {
+    routing::Router::new()
         .route("/", routing::get(hello_world))
         .route("/-1/error", routing::get(throw_error))
         .route("/1/*packets", routing::get(calculate_sled_id))
+        .route("/4/contest", routing::post(summarize_reindeer_contest))
+        .route("/4/strength", routing::post(calculate_reindeer_strength))
+        .route("/6", routing::post(count_elves))
+        .route("/7/bake", routing::get(analyze_recipe).post(analyze_recipe))
+        .route("/7/decode", routing::get(decode_cookie).post(decode_cookie))
+        .route("/8/weight/:pokedex_id", routing::get(fetch_pokemon_weight))
+        .route(
+            "/8/drop/:pokedex_id",
+            routing::get(calculate_pokemon_impact_momentum),
+        )
 }
 
-/// Complete [Challenge -1: Task](https://console.shuttle.rs/cch/challenge/-1#:~:text=one%20that%20counts.-,%E2%AD%90,-Task%201%3A%20Everything)
+/// Complete [Challenge -1: Task](https://console.shuttle.rs/cch/challenge/-1#:~:text=⭐)
 #[tracing::instrument(ret)]
 pub async fn hello_world() -> &'static str {
     "Hello Shuttle CCH 2023!"
 }
 
-/// Complete [Challenge -1: Bonus](https://console.shuttle.rs/cch/challenge/-1#:~:text=the%20bonus%20task.-,%F0%9F%8E%81,-Task%202%3A%20Fake)
+/// Complete [Challenge -1: Bonus](https://console.shuttle.rs/cch/challenge/-1#:~:text=🎁)
 #[tracing::instrument(ret)]
 pub async fn throw_error() -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Gimme them bonus points")
 }
 
-/// Complete [Challenge 1: Task](https://console.shuttle.rs/cch/challenge/1#:~:text=to%20restore%20order.-,%E2%AD%90,-Task%201%3A%20Cube)
+/// Complete [Challenge 1: Task](https://console.shuttle.rs/cch/challenge/1#:~:text=⭐)
 #[allow(dead_code)]
-#[tracing::instrument(ret)]
 #[cfg_attr(tarpaulin, coverage(off))]
 #[cfg_attr(tarpaulin, tarpaulin::skip)]
-pub async fn cube_the_bits(Path(values): Path<(u32, u32)>) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        std::ops::BitXor::bitxor(values.0, values.1)
-            .pow(3u32)
-            .to_string(),
-    )
+#[tracing::instrument(ret)]
+pub async fn cube_the_bits(Path(values): Path<(u32, u32)>) -> Json<u32> {
+    Json(BitXor::bitxor(values.0, values.1).pow(3u32))
 }
 
-/// Complete [Challenge 1: Bonus](https://console.shuttle.rs/cch/challenge/1#:~:text=1728-,%F0%9F%8E%81,-Task%202%3A%20The)
+/// Complete [Challenge 1: Bonus](https://console.shuttle.rs/cch/challenge/1#:~:text=🎁)
 #[tracing::instrument(ret)]
 pub async fn calculate_sled_id(
     types::VariadicPathValues(packets): types::VariadicPathValues,
-) -> impl IntoResponse {
-    // let mut bad_packets: Vec<Value> = Vec::new();
+) -> Result<Json<i64>, types::NonNumericPacketIdResponse> {
+    let (mut packet_ids, mut invalid_packets) = (Vec::<Value>::new(), Vec::<Value>::new());
 
-    let sled_id = packets
-        .into_iter()
-        .filter_map(|value| {
-            if let Value::Number(val) = value {
-                val.as_i64()
-            } else {
-                // bad_packets.push(value);
-                None
-            }
-        })
-        .fold(0i64, std::ops::BitXor::bitxor)
-        .pow(3u32);
+    for value in packets {
+        if matches!(value, Value::Number(_)) {
+            packet_ids.push(value);
+        } else {
+            invalid_packets.push(value);
+        }
+    }
 
-    // if bad_packets.is_empty() {
-    //     (StatusCode::OK, sled_id.to_string())
-    // } else {
-    //     (
-    //         StatusCode::BAD_REQUEST,
-    //         format!("Non-numeric packet ids: {bad_packets:?}"),
-    //     )
-    // }
+    if invalid_packets.is_empty() {
+        Ok(Json(
+            packet_ids
+                .iter()
+                .filter_map(Value::as_i64)
+                .fold(0i64, BitXor::bitxor)
+                .pow(3u32),
+        ))
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            Json(HashMap::from([(
+                String::from("non-numeric packet ids"),
+                invalid_packets,
+            )])),
+        ))
+    }
+}
 
-    (StatusCode::OK, sled_id.to_string())
+/// Complete [Challenge 4: Task](https://console.shuttle.rs/cch/challenge/4#:~:text=⭐)
+#[tracing::instrument(ret)]
+pub async fn calculate_reindeer_strength(
+    Json(stats): Json<Vec<types::ReindeerStats>>,
+) -> Json<i64> {
+    Json(
+        stats
+            .iter()
+            .map(|reindeer| reindeer.strength)
+            .fold(0i64, i64::add),
+    )
+}
+
+/// Complete [Challenge 4: Bonus](https://console.shuttle.rs/cch/challenge/4#:~:text=🎁)
+#[tracing::instrument(ret)]
+pub async fn summarize_reindeer_contest(
+    Json(stats): Json<Vec<types::ReindeerStats>>,
+) -> Json<HashMap<String, String>> {
+    Json(types::ReindeerStats::summarize(&stats))
+}
+
+/// Complete [Challenge 6: Task + Bonus](https://console.shuttle.rs/cch/challenge/6#:~:text=🎄)
+#[tracing::instrument(ret)]
+pub async fn count_elves(text: String) -> Json<types::ElfShelfCountSummary> {
+    Json(types::ElfShelfCountSummary::from(text))
+}
+
+/// Complete [Challenge 7: Task](https://console.shuttle.rs/cch/challenge/7#:~:text=⭐)
+#[tracing::instrument(ret)]
+pub async fn decode_cookie(
+    types::CookieRecipeHeader(recipe): types::CookieRecipeHeader<Value>,
+) -> Json<Value> {
+    Json(recipe)
+}
+
+/// Complete [Challenge 7: Task](https://console.shuttle.rs/cch/challenge/7#:~:text=🎁)
+#[tracing::instrument(ret)]
+pub async fn analyze_recipe(
+    types::CookieRecipeHeader(data): types::CookieRecipeHeader<types::CookieRecipeInventory>,
+) -> Result<Json<types::CookieRecipeInventory>, types::EmptyRecipeOrPantryResponse> {
+    if data.cookies != 0 || data.recipe.is_empty() || data.pantry.is_empty() {
+        Err((StatusCode::UNPROCESSABLE_ENTITY, Json(data)))
+    } else {
+        Ok(Json(data.bake()))
+    }
+}
+
+/// Complete [Challenge 8: Task](https://console.shuttle.rs/cch/challenge/8#:~:text=⭐)
+#[tracing::instrument(ret)]
+pub async fn fetch_pokemon_weight(
+    Path(pokedex_id): Path<u16>,
+) -> Result<Json<u32>, (StatusCode, String)> {
+    Ok(Json(utils::fetch_pokemon_weight(pokedex_id).await?))
+}
+
+/// Complete [Challenge 8: Task](https://console.shuttle.rs/cch/challenge/8#:~:text=🎁)
+#[allow(non_upper_case_globals)]
+#[tracing::instrument(ret)]
+pub async fn calculate_pokemon_impact_momentum(
+    Path(pokedex_id): Path<u16>,
+) -> Result<Json<f64>, (StatusCode, String)> {
+    /// Gravitational acceleration in m/s²
+    const gravity: f64 = 9.825;
+    /// Chimney height in meters
+    const drop_height: f64 = 10.0;
+
+    let poke_weight = utils::fetch_pokemon_weight(pokedex_id).await?;
+
+    // Calculate the final speed with kinematic equation
+    let final_speed = (2.0 * gravity * drop_height).sqrt();
+
+    // Calculate the impact momentum
+    let momentum = f64::from(poke_weight) * final_speed;
+
+    Ok(Json(momentum))
 }
