@@ -8,7 +8,24 @@ use std::collections::HashMap;
 // Third-Party Imports
 use axum::http::StatusCode;
 use futures::prelude::*;
+use image_rs::Pixel;
 use serde_json::Value;
+
+/// Determine if the supplied [`pixel`](image_rs::RGB)
+/// would be perceived as "magical red" when viewed with
+/// Santa's night vision goggles.
+///
+/// The goggles considers a pixel "magical red" if the
+/// color values of the pixel fulfill the formula:
+///
+/// > `blue + green < red`
+pub fn is_magic_red(data: (u32, u32, image_rs::Rgba<u8>)) -> bool {
+    let (_x, _y, rgba) = data;
+
+    let pixel = rgba.to_rgb();
+
+    u16::from(pixel[1]) + u16::from(pixel[2]) < u16::from(pixel[0])
+}
 
 /// TODO
 #[tracing::instrument(ret)]

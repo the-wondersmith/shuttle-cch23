@@ -14,11 +14,12 @@ use std::collections::HashMap;
 // Third-Party Imports
 use axum::{
     body::Body,
-    extract::{Json, Path},
+    extract::{multipart::Multipart, Json, Path},
     http::{Request, StatusCode},
     response::IntoResponse,
     routing,
 };
+use image_rs::GenericImageView;
 use serde_json::Value;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
@@ -223,7 +224,41 @@ pub async fn serve_static_asset(
 }
 
 /// Complete [Day 11: Bonus](https://console.shuttle.rs/cch/challenge/11#:~:text=🎁)
-#[tracing::instrument(ret)]
-pub async fn calculate_magical_red_pixel_count() -> impl IntoResponse {
-    todo!()
+#[tracing::instrument(skip(request), fields(image.name, image.magic.red))]
+pub async fn calculate_magical_red_pixel_count(
+    mut request: Multipart,
+) -> Result<Json<u64>, StatusCode> {
+    let field = request
+        .next_field()
+        .await
+        .map_err(|error| {
+            tracing::error!("{error:?}");
+            StatusCode::UNPROCESSABLE_ENTITY
+        })?
+        .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+
+    tracing::Span::current().record("image.name", field.name().unwrap());
+
+    let image = field
+        .bytes()
+        .await
+        .map_err(|error| {
+            tracing::error!("{error:?}");
+        })
+        .and_then(|data| {
+            image_rs::load_from_memory(data.as_ref()).map_err(|error| {
+                tracing::error!("{error:?}");
+            })
+        })
+        .map_err(|()| StatusCode::UNPROCESSABLE_ENTITY)?;
+
+    let magic_red_count = image
+        .pixels()
+        .map(utils::is_magic_red)
+        .map(u64::from)
+        .sum::<u64>();
+
+    tracing::Span::current().record("image.magic.red", magic_red_count);
+
+    Ok(Json(magic_red_count))
 }
