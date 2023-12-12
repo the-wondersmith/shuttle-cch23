@@ -13,12 +13,15 @@ use std::collections::HashMap;
 
 // Third-Party Imports
 use axum::{
+    body::Body,
     extract::{Json, Path},
-    http::StatusCode,
+    http::{Request, StatusCode},
     response::IntoResponse,
     routing,
 };
 use serde_json::Value;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 // Module Declarations
 #[cfg(test)]
@@ -53,21 +56,27 @@ pub fn router() -> routing::Router {
             "/8/drop/:pokedex_id",
             routing::get(calculate_pokemon_impact_momentum),
         )
+        .route("/11/assets/:asset", routing::get(serve_static_asset))
+        // .nest_service("/11/assets", ServeDir::new("assets"))
+        .route(
+            "/11/red_pixels",
+            routing::post(calculate_magical_red_pixel_count),
+        )
 }
 
-/// Complete [Challenge -1: Task](https://console.shuttle.rs/cch/challenge/-1#:~:text=⭐)
+/// Complete [Day -1: Challenge](https://console.shuttle.rs/cch/challenge/-1#:~:text=⭐)
 #[tracing::instrument(ret)]
 pub async fn hello_world() -> &'static str {
     "Hello Shuttle CCH 2023!"
 }
 
-/// Complete [Challenge -1: Bonus](https://console.shuttle.rs/cch/challenge/-1#:~:text=🎁)
+/// Complete [Day -1: Bonus](https://console.shuttle.rs/cch/challenge/-1#:~:text=🎁)
 #[tracing::instrument(ret)]
 pub async fn throw_error() -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Gimme them bonus points")
 }
 
-/// Complete [Challenge 1: Task](https://console.shuttle.rs/cch/challenge/1#:~:text=⭐)
+/// Complete [Day 1: Challenge](https://console.shuttle.rs/cch/challenge/1#:~:text=⭐)
 #[allow(dead_code)]
 #[cfg_attr(tarpaulin, coverage(off))]
 #[cfg_attr(tarpaulin, tarpaulin::skip)]
@@ -76,7 +85,7 @@ pub async fn cube_the_bits(Path(values): Path<(u32, u32)>) -> Json<u32> {
     Json(BitXor::bitxor(values.0, values.1).pow(3u32))
 }
 
-/// Complete [Challenge 1: Bonus](https://console.shuttle.rs/cch/challenge/1#:~:text=🎁)
+/// Complete [Day 1: Bonus](https://console.shuttle.rs/cch/challenge/1#:~:text=🎁)
 #[tracing::instrument(ret)]
 pub async fn calculate_sled_id(
     types::VariadicPathValues(packets): types::VariadicPathValues,
@@ -110,7 +119,7 @@ pub async fn calculate_sled_id(
     }
 }
 
-/// Complete [Challenge 4: Task](https://console.shuttle.rs/cch/challenge/4#:~:text=⭐)
+/// Complete [Day 4: Challenge](https://console.shuttle.rs/cch/challenge/4#:~:text=⭐)
 #[tracing::instrument(ret)]
 pub async fn calculate_reindeer_strength(
     Json(stats): Json<Vec<types::ReindeerStats>>,
@@ -123,7 +132,7 @@ pub async fn calculate_reindeer_strength(
     )
 }
 
-/// Complete [Challenge 4: Bonus](https://console.shuttle.rs/cch/challenge/4#:~:text=🎁)
+/// Complete [Day 4: Bonus](https://console.shuttle.rs/cch/challenge/4#:~:text=🎁)
 #[tracing::instrument(ret)]
 pub async fn summarize_reindeer_contest(
     Json(stats): Json<Vec<types::ReindeerStats>>,
@@ -131,13 +140,13 @@ pub async fn summarize_reindeer_contest(
     Json(types::ReindeerStats::summarize(&stats))
 }
 
-/// Complete [Challenge 6: Task + Bonus](https://console.shuttle.rs/cch/challenge/6#:~:text=🎄)
+/// Complete [Day 6: Task + Bonus](https://console.shuttle.rs/cch/challenge/6#:~:text=🎄)
 #[tracing::instrument(ret)]
 pub async fn count_elves(text: String) -> Json<types::ElfShelfCountSummary> {
     Json(types::ElfShelfCountSummary::from(text))
 }
 
-/// Complete [Challenge 7: Task](https://console.shuttle.rs/cch/challenge/7#:~:text=⭐)
+/// Complete [Day 7: Challenge](https://console.shuttle.rs/cch/challenge/7#:~:text=⭐)
 #[tracing::instrument(ret)]
 pub async fn decode_cookie(
     types::CookieRecipeHeader(recipe): types::CookieRecipeHeader<Value>,
@@ -145,7 +154,7 @@ pub async fn decode_cookie(
     Json(recipe)
 }
 
-/// Complete [Challenge 7: Task](https://console.shuttle.rs/cch/challenge/7#:~:text=🎁)
+/// Complete [Day 7: Bonus](https://console.shuttle.rs/cch/challenge/7#:~:text=🎁)
 #[tracing::instrument(ret)]
 pub async fn analyze_recipe(
     types::CookieRecipeHeader(data): types::CookieRecipeHeader<types::CookieRecipeInventory>,
@@ -157,7 +166,7 @@ pub async fn analyze_recipe(
     }
 }
 
-/// Complete [Challenge 8: Task](https://console.shuttle.rs/cch/challenge/8#:~:text=⭐)
+/// Complete [Day 8: Challenge](https://console.shuttle.rs/cch/challenge/8#:~:text=⭐)
 #[tracing::instrument(ret)]
 pub async fn fetch_pokemon_weight(
     Path(pokedex_id): Path<u16>,
@@ -165,7 +174,7 @@ pub async fn fetch_pokemon_weight(
     Ok(Json(utils::fetch_pokemon_weight(pokedex_id).await?))
 }
 
-/// Complete [Challenge 8: Task](https://console.shuttle.rs/cch/challenge/8#:~:text=🎁)
+/// Complete [Day 8: Bonus](https://console.shuttle.rs/cch/challenge/8#:~:text=🎁)
 #[allow(non_upper_case_globals)]
 #[tracing::instrument(ret)]
 pub async fn calculate_pokemon_impact_momentum(
@@ -185,4 +194,36 @@ pub async fn calculate_pokemon_impact_momentum(
     let momentum = f64::from(poke_weight) * final_speed;
 
     Ok(Json(momentum))
+}
+
+/// Complete [Day 11: Challenge](https://console.shuttle.rs/cch/challenge/11#:~:text=⭐)
+#[tracing::instrument(skip_all, fields(error))]
+pub async fn serve_static_asset(
+    Path(asset): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    ServeFile::new(format!("assets/{asset}"))
+        .oneshot(request)
+        .await
+        .map(|response| {
+            match response.status() {
+                StatusCode::OK => tracing::info!("resolved asset for: {asset}"),
+                StatusCode::NOT_FOUND => tracing::warn!("no asset found for: {asset}"),
+                status => tracing::error!(
+                    r#"error resolving asset: {{"asset": {asset}, "status": {status}}}"#
+                ),
+            };
+
+            IntoResponse::into_response(response)
+        })
+        .map_err(|error| {
+            tracing::Span::current().record("error", &error.to_string());
+            StatusCode::UNPROCESSABLE_ENTITY
+        })
+}
+
+/// Complete [Day 11: Bonus](https://console.shuttle.rs/cch/challenge/11#:~:text=🎁)
+#[tracing::instrument(ret)]
+pub async fn calculate_magical_red_pixel_count() -> impl IntoResponse {
+    todo!()
 }

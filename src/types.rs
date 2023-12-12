@@ -375,7 +375,7 @@ impl<State: Send + Sync> FromRequestParts<State> for VariadicPathValues {
 // <editor-fold desc="// ReindeerStats ...">
 
 /// Custom struct for extracting data from the body
-/// of requests to the endpoint for [Challenge 4: Task](https://console.shuttle.rs/cch/challenge/4#:~:text=⭐)
+/// of requests to the endpoint for [Day 4: Challenge](https://console.shuttle.rs/cch/challenge/4#:~:text=⭐)
 #[derive(Serialize, Deserialize)]
 pub struct ReindeerStats {
     /// The reindeer's human-readable name
@@ -498,7 +498,7 @@ impl ReindeerStats {
 // <editor-fold desc="// ElfShelfCountSummary ...">
 
 /// Custom struct for responding to elf/shelf count
-/// requests for [Challenge 6](https://console.shuttle.rs/cch/challenge/6)
+/// requests for [Day 6](https://console.shuttle.rs/cch/challenge/6)
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ElfShelfCountSummary {
     /// The count of how many times the literal
