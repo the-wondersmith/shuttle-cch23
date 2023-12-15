@@ -6,9 +6,14 @@ use core::{
     cmp::PartialOrd,
     convert::{AsMut, AsRef},
     fmt::{Debug, Display, Formatter, Result as FormatResult},
-    ops::{Not, Sub, SubAssign},
+    mem::discriminant as enum_variant,
+    ops::{Deref, DerefMut, Not, Sub, SubAssign},
 };
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    env::{set_var as set_env_var, temp_dir, var as get_env_var},
+    path::PathBuf,
+};
 
 // Third-Party Imports
 use axum::http::StatusCode;
@@ -19,18 +24,18 @@ use axum::{
     Json,
 };
 use b64::{engine::general_purpose as base64, Engine};
-use num::FromPrimitive;
+use itertools::Itertools;
+use num_traits::cast::FromPrimitive;
 use serde::{de::DeserializeOwned, ser::Error, Deserialize, Serialize};
-use serde_json::value::Value;
-use unicode_normalization::UnicodeNormalization;
+use serde_json::{map::Map as JsonObject, value::Value};
+use shuttle_persist::{PersistError as PersistenceError, PersistInstance as Persistence};
+use shuttle_secrets::SecretStore;
+use sqlx::{error::Error as DbError, postgres::PgQueryResult};
 
-/// Unicode "missing character"
-const UFFFD: &str = "\u{FFFD}";
-
+/// TODO(the-wondersmith): documentation
+pub(super) type RecipeAnalysisResponse = (StatusCode, Json<CookieRecipeInventory>);
 /// TODO(the-wondersmith): documentation
 pub(super) type NonNumericPacketIdResponse = (StatusCode, Json<HashMap<String, Vec<Value>>>);
-/// TODO(the-wondersmith): documentation
-pub(super) type EmptyRecipeOrPantryResponse = (StatusCode, Json<CookieRecipeInventory>);
 
 /// Determine if the supplied value
 /// is actually (or effectively) zero
@@ -39,147 +44,133 @@ fn is_zero<T: Display>(value: T) -> bool {
     value.to_string() == "0"
 }
 
-// <editor-fold desc="// CookieRecipeInventory ...">
+// <editor-fold desc="// ShuttleAppState ...">
 
-#[allow(missing_docs)]
-#[cfg_attr(test, derive(Eq, PartialEq))]
-#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
-pub struct _CookieData {
-    #[serde(default)]
-    #[serde(skip_serializing_if = "is_zero")]
-    pub flour: u64,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "is_zero")]
-    pub sugar: u64,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "is_zero")]
-    pub butter: u64,
-    #[serde(default)]
-    #[serde(rename = "baking powder")]
-    #[serde(skip_serializing_if = "is_zero")]
-    pub baking_powder: u64,
-    #[serde(default)]
-    #[serde(rename = "chocolate chips")]
-    #[serde(skip_serializing_if = "is_zero")]
-    pub chocolate_chips: u64,
+/// The service's "shared" state
+#[derive(Clone, Debug)]
+pub struct ShuttleAppState {
+    /// A pool of connections to the
+    /// service's PostgreSQL database
+    pub db: sqlx::PgPool,
+    /// The service's instance-independent
+    /// persistent key-value store
+    pub persistence: Persistence,
 }
 
-/// A recipe detailing the required
-/// ingredients to make one cookie
-pub type CookieRecipe = _CookieData;
+//noinspection RsReplaceMatchExpr
+impl ShuttleAppState {
+    /// Initialize the service's state
+    #[tracing::instrument(skip_all)]
+    pub fn initialize(
+        db: sqlx::PgPool,
+        secrets: Option<SecretStore>,
+        persistence: Option<Persistence>,
+    ) -> anyhow::Result<Self> {
+        Self::_initialize_secrets(secrets);
 
-/// A per-ingredient inventory of
-/// the contents of Santa's pantry
-pub type PantryInventory = _CookieData;
+        let persistence = persistence.map_or_else(
+            Self::_default_persistence,
+            Result::<Persistence, PersistenceError>::Ok,
+        )?;
 
-/// A cookie recipe detailing the required
-/// per-cookie amount of each ingredient,
-/// along with a, inventory detailing how
-/// much of each ingredient remains in
-/// Santa's pantry post-baking
-#[cfg_attr(test, derive(Eq, PartialEq))]
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct CookieRecipeInventory {
-    /// The absolute total number of cookies
-    /// that can be baked according to the
-    /// associated recipe with the ingredients
-    /// in the associated pantry inventory
-    #[serde(default)]
-    #[serde(skip_serializing_if = "is_zero")]
-    pub cookies: u64,
-    /// A recipe detailing the required
-    /// ingredients to make one cookie
-    #[serde(default)]
-    #[serde(skip_serializing_if = "CookieRecipe::is_empty")]
-    pub recipe: CookieRecipe,
-    /// A per-ingredient inventory
-    /// of the contents of Santa's
-    /// pantry post-baking
-    #[serde(default)]
-    pub pantry: PantryInventory,
-}
-
-impl _CookieData {
-    /// Set all ingredient fields to 0
-    pub(super) fn clear(&mut self) {
-        [
-            self.flour,
-            self.sugar,
-            self.butter,
-            self.baking_powder,
-            self.chocolate_chips,
-        ] = [0u64; 5];
+        Ok(Self { db, persistence })
     }
 
-    /// Check if a "pantry" is "empty"
-    pub(super) fn is_empty(&self) -> bool {
-        [
-            self.flour,
-            self.sugar,
-            self.butter,
-            self.baking_powder,
-            self.chocolate_chips,
-        ]
-        .iter()
-        .any(|item| u64::gt(item, &0u64))
-        .not()
+    #[cfg_attr(tarpaulin, coverage(off))]
+    #[cfg_attr(tarpaulin, tarpaulin::skip)]
+    fn _default_secrets() -> SecretStore {
+        SecretStore::new(BTreeMap::new())
     }
+    fn _initialize_secrets(secrets: Option<SecretStore>) -> SecretStore {
+        let secrets = secrets.unwrap_or_else(Self::_default_secrets);
 
-    /// "Subtract" the right instance from the left instance
-    fn _sub<Left: AsRef<Self>, Right: AsRef<Self>>(left: Left, right: Right) -> Self {
-        let (left, right) = (left.as_ref(), right.as_ref());
-
-        Self {
-            flour: left.flour.saturating_sub(right.flour),
-            sugar: left.sugar.saturating_sub(right.sugar),
-            butter: left.butter.saturating_sub(right.butter),
-            baking_powder: left.baking_powder.saturating_sub(right.baking_powder),
-            chocolate_chips: left.chocolate_chips.saturating_sub(right.chocolate_chips),
+        if let Some(path) = get_env_var("CCH23_PERSISTENCE_DIR")
+            .ok()
+            .or_else(|| secrets.get("PERSISTENCE_DIR"))
+        {
+            set_env_var("CCH23_PERSISTENCE_DIR", path);
         }
+
+        secrets
     }
 
-    /// Determine if the right hand instance can be "subtracted" from the left hand
-    /// in full, that is - without potentially causing an "underflow" condition
-    fn _can_sub<Left: AsRef<Self>, Right: AsRef<Self>>(left: Left, right: Right) -> bool {
-        let (left, right) = (left.as_ref(), right.as_ref());
+    #[cfg_attr(tarpaulin, coverage(off))]
+    #[cfg_attr(tarpaulin, tarpaulin::skip)]
+    fn _default_persistence() -> anyhow::Result<Persistence, PersistenceError> {
+        let path = get_env_var("CCH23_PERSISTENCE_DIR")
+            .ok()
+            .map_or_else(
+                || temp_dir().join("shuttle-cch23").join("persistence"),
+                PathBuf::from,
+            )
+            .canonicalize()
+            .map_err(PersistenceError::CreateFolder)?;
 
-        [
-            (left.flour, right.flour),
-            (left.sugar, right.sugar),
-            (left.butter, right.butter),
-            (left.baking_powder, right.baking_powder),
-            (left.chocolate_chips, right.chocolate_chips),
-        ]
-        .iter()
-        .any(|pair| u64::le(&pair.0, &pair.1))
-        .not()
-    }
-
-    /// Perform an in-place subtraction of the right hand instance from the left
-    fn _sub_assign<AsCookieData: AsRef<Self>>(&mut self, other: AsCookieData) {
-        let other = other.as_ref();
-
-        self.flour = self.flour.saturating_sub(other.flour);
-        self.sugar = self.sugar.saturating_sub(other.sugar);
-        self.butter = self.butter.saturating_sub(other.butter);
-        self.baking_powder = self.baking_powder.saturating_sub(other.baking_powder);
-        self.chocolate_chips = self.chocolate_chips.saturating_sub(other.chocolate_chips);
+        Persistence::new(path)
     }
 }
 
-impl AsMut<Self> for _CookieData {
+// </editor-fold desc="// ShuttleAppState ...">
+
+// <editor-fold desc="// CookieData ...">
+
+/// TODO(the-wondersmith): documentation
+#[cfg_attr(test, derive(Eq, PartialEq))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CookieData(pub JsonObject<String, Value>);
+
+impl Deref for CookieData {
+    type Target = JsonObject<String, Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for CookieData {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<Value> for CookieData {
+    fn into(self) -> Value {
+        Value::Object(self.0)
+    }
+}
+
+impl Display for CookieData {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FormatResult {
+        write!(formatter, "{}", Self::_stringify(&self.0.clone().into()))
+    }
+}
+
+impl AsMut<Self> for CookieData {
     fn as_mut(&mut self) -> &mut Self {
         self
     }
 }
 
-impl AsRef<Self> for _CookieData {
+impl AsRef<Self> for CookieData {
     fn as_ref(&self) -> &Self {
         self
     }
 }
 
-impl<AsCookieData: AsRef<Self>> Sub<AsCookieData> for _CookieData {
+impl TryFrom<Value> for CookieData {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        if let Value::Object(instance) = value {
+            Ok(Self(instance))
+        } else {
+            Err(value)
+        }
+    }
+}
+
+impl<AsCookieData: AsRef<Self>> Sub<AsCookieData> for CookieData {
     type Output = Self;
 
     fn sub(self, other: AsCookieData) -> Self::Output {
@@ -187,17 +178,221 @@ impl<AsCookieData: AsRef<Self>> Sub<AsCookieData> for _CookieData {
     }
 }
 
-impl<'data, AsCookieData: AsRef<_CookieData>> Sub<AsCookieData> for &'data _CookieData {
-    type Output = _CookieData;
+impl<'data, AsCookieData: AsRef<CookieData>> Sub<AsCookieData> for &'data CookieData {
+    type Output = CookieData;
 
-    fn sub(self: &'data _CookieData, other: AsCookieData) -> Self::Output {
+    fn sub(self: &'data CookieData, other: AsCookieData) -> Self::Output {
         Self::Output::_sub(self, other)
     }
 }
-impl<'data, AsCookieData: AsRef<_CookieData>> SubAssign<AsCookieData> for &'data mut _CookieData {
+impl<'data, AsCookieData: AsRef<CookieData>> SubAssign<AsCookieData> for &'data mut CookieData {
     fn sub_assign(&mut self, other: AsCookieData) {
-        _CookieData::_sub_assign(self, other);
+        CookieData::_sub_assign(self, other);
     }
+}
+
+impl CookieData {
+    /// Set all ingredient fields to 0
+    pub(super) fn clear(&mut self) {
+        self.retain(|_, _| false)
+    }
+
+    /// Check if a "pantry" is "empty"
+    pub(super) fn is_empty(&self) -> bool {
+        Self::_is_empty(&self.0)
+    }
+
+    fn _is_empty(object: &JsonObject<String, Value>) -> bool {
+        object.keys().len() == 0
+            || object
+                .iter()
+                .any(|(_, value)| match value {
+                    Value::Null => false,
+                    Value::Bool(flag) => *flag,
+                    Value::Number(value) => value
+                        .as_u64()
+                        .map(|value| value.gt(&0u64))
+                        .or_else(|| value.as_i64().map(|value| value.gt(&0i64)))
+                        .or_else(|| value.as_f64().map(|value| value.gt(&0.0)))
+                        .is_some_and(|value| value),
+                    Value::String(value) => value.is_empty().not(),
+                    Value::Array(value) => value.is_empty().not(),
+                    Value::Object(value) => Self::_is_empty(value).not(),
+                })
+                .not()
+    }
+
+    fn _stringify(data: &Value) -> String {
+        match data {
+            Value::Null => String::from("null"),
+            Value::Bool(value) => value.to_string(),
+            Value::String(value) => value.to_string(),
+            Value::Number(value) => value.to_string(),
+            Value::Array(value) => {
+                format!("[{}]", value.iter().map(Self::_stringify).join(", "))
+            }
+            Value::Object(mapping) => {
+                format!(
+                    "{{{}}}",
+                    mapping
+                        .iter()
+                        .map(|(key, value)| format!(
+                            "{}: {}",
+                            key.replace(' ', "_"),
+                            Self::_stringify(value)
+                        ))
+                        .join(", ")
+                )
+            }
+        }
+    }
+
+    /// "Subtract" the right instance from the left instance
+    fn _sub<Left: AsRef<Self>, Right: AsRef<Self>>(left: Left, right: Right) -> Self {
+        let (left, right) = (left.as_ref(), right.as_ref());
+
+        let mut instance = JsonObject::<String, Value>::new();
+
+        for (key, l_value, r_value) in Self::_intersection(left, right) {
+            if matches!((l_value, r_value), (Value::Number(_), Value::Number(_))) {
+                if let (Some(l_value), Some(r_value)) = (l_value.as_u64(), r_value.as_u64()) {
+                    instance[key] = Value::from(l_value.saturating_sub(r_value));
+                } else if let (Some(l_value), Some(r_value)) = (l_value.as_i64(), r_value.as_i64())
+                {
+                    instance[key] = Value::from(l_value - r_value);
+                } else if let (Some(l_value), Some(r_value)) = (l_value.as_f64(), r_value.as_f64())
+                {
+                    instance[key] = Value::from(l_value - r_value);
+                }
+            } else {
+                tracing::warn!(
+                    "Unsupported value type combination for \
+                    in-place subtraction: {{l_value: {:?}, r_value: {:?}}}",
+                    enum_variant(l_value),
+                    enum_variant(r_value),
+                );
+            }
+        }
+
+        Self(instance)
+    }
+
+    /// Determine if the right hand instance can be "subtracted" from the left hand
+    /// in full, that is - without potentially causing an "underflow" condition
+    pub fn _can_sub<Left: AsRef<Self>, Right: AsRef<Self>>(left: Left, right: Right) -> bool {
+        Self::_intersection(left.as_ref(), right.as_ref())
+            .any(|(_, left, right)| {
+                if let (Some(left_value), Some(right_value)) = (left.as_u64(), right.as_u64()) {
+                    left_value < right_value
+                } else if let (Some(left_value), Some(right_value)) =
+                    (left.as_i64(), right.as_i64())
+                {
+                    left_value < right_value
+                } else if let (Some(left_value), Some(right_value)) =
+                    (left.as_f64(), right.as_f64())
+                {
+                    left_value < right_value
+                } else {
+                    true
+                }
+            })
+            .not()
+    }
+
+    /// Get the key/value pairs that exist in both of the supplied
+    /// JSON objects if and only if the value is of the same type
+    /// on both "sides"
+    fn _intersection<'left, 'right>(
+        left: &'left Self,
+        right: &'right Self,
+    ) -> impl Iterator<Item = (&'left String, &'left Value, &'right Value)> {
+        left.iter().filter_map(|(key, l_val)| {
+            right.get(key).and_then(|r_val| {
+                if enum_variant(l_val) == enum_variant(r_val) {
+                    Some((key, l_val, r_val))
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    /// Perform an in-place subtraction of the right hand instance from the left
+    fn _sub_assign<AsCookieData: AsRef<Self>>(&mut self, other: AsCookieData) {
+        let other = other.as_ref();
+
+        let mut computed: Vec<(String, Value)> = Vec::new();
+
+        for (key, left, right) in Self::_intersection(self, other) {
+            if let (Some(l_value), Some(r_value)) = (left.as_u64(), right.as_u64()) {
+                computed.push((
+                    key.to_string(),
+                    Value::from(l_value.saturating_sub(r_value)),
+                ));
+            } else if let (Some(l_value), Some(r_value)) = (left.as_i64(), right.as_i64()) {
+                computed.push((key.to_string(), Value::from(l_value - r_value)));
+            } else if let (Some(l_value), Some(r_value)) = (left.as_f64(), right.as_f64()) {
+                computed.push((key.to_string(), Value::from(l_value - r_value)));
+            } else {
+                tracing::warn!(
+                    "Unsupported value type combination for \
+                    in-place subtraction: {{left: {:?}, right: {:?}}}",
+                    enum_variant(left),
+                    enum_variant(right),
+                );
+            }
+        }
+
+        for (key, computed_value) in computed {
+            self[&key] = computed_value;
+        }
+    }
+}
+
+// </editor-fold desc="// CookieData ...">
+
+/// A recipe detailing the required
+/// ingredients to make one cookie
+pub type CookieRecipe = CookieData;
+
+/// A per-ingredient inventory of
+/// the contents of Santa's pantry
+pub type PantryInventory = CookieData;
+
+// <editor-fold desc="// CookieRecipeInventory ...">
+
+/// A cookie recipe detailing the required
+/// per-cookie amount of each ingredient,
+/// along with a, inventory detailing how
+/// much of each ingredient remains in
+/// Santa's pantry post-baking
+#[derive(derive_more::Display)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[display(
+    fmt = r#"{{cookies: {}, recipe: {}, pantry: {}}}"#,
+    cookies,
+    recipe,
+    pantry
+)]
+pub struct CookieRecipeInventory {
+    /// The absolute total number of cookies
+    /// that can be baked according to the
+    /// associated recipe with the ingredients
+    /// in the associated pantry inventory
+    #[serde(default)]
+    // #[serde(skip_serializing_if = "is_zero")]
+    pub cookies: u64,
+    /// A recipe detailing the required
+    /// ingredients to make one cookie
+    #[serde(default)]
+    #[serde(skip_serializing_if = "CookieRecipe::is_empty")]
+    pub recipe: CookieData,
+    /// A per-ingredient inventory
+    /// of the contents of Santa's
+    /// pantry post-baking
+    #[serde(default)]
+    pub pantry: CookieData,
 }
 
 impl CookieRecipeInventory {
@@ -243,16 +438,10 @@ impl CookieRecipeInventory {
     ///   }
     /// }
     /// ```
-    #[tracing::instrument(
-        skip(self),
-        fields(
-            after = Option::<String>::None,
-            before = Option::<String>::None,
-        ),
-    )]
+    #[tracing::instrument(skip(self), fields(after, before))]
     pub fn bake(mut self) -> Self {
         // Record the pre-bake state as part of the current span.
-        tracing::Span::current().record("before", serde_json::to_string(&self).ok());
+        tracing::Span::current().record("before", format!("{}", &self).as_str());
 
         if self.recipe.is_empty() {
             tracing::warn!(r#"Declining to "re-bake" previously recipe/pantry"#);
@@ -261,15 +450,19 @@ impl CookieRecipeInventory {
 
         self.cookies = 0;
 
-        while PantryInventory::_can_sub(self.pantry.as_ref(), self.recipe.as_ref()) {
-            self.cookies += 1;
-            PantryInventory::_sub_assign(self.pantry.as_mut(), self.recipe.as_ref());
+        loop {
+            if PantryInventory::_can_sub(self.pantry.as_ref(), self.recipe.as_ref()) {
+                PantryInventory::_sub_assign(self.pantry.as_mut(), self.recipe.as_ref());
+                self.cookies += 1;
+            } else {
+                break;
+            }
         }
 
         self.recipe.clear();
 
         // Record the post-bake state as part of the current span.
-        tracing::Span::current().record("after", serde_json::to_string(&self).ok());
+        tracing::Span::current().record("after", format!("{}", &self).as_str());
 
         self
     }
@@ -290,8 +483,9 @@ where
     State: Send + Sync,
     Recipe: Debug + DeserializeOwned,
 {
-    type Rejection = (StatusCode, Json<Value>);
+    type Rejection = (StatusCode, String);
 
+    #[tracing::instrument(skip_all, fields(cookie))]
     async fn from_request_parts(
         parts: &mut Parts,
         _: &State,
@@ -301,9 +495,10 @@ where
             .get(COOKIE)
             .ok_or((
                 StatusCode::BAD_REQUEST,
-                Json(Value::from(r#""cookie" header missing"#)),
+                String::from(r#""cookie" header missing"#),
             ))
             .and_then(|header| {
+                tracing::Span::current().record("cookie", format!("{header:?}").as_str());
                 let header = header.as_bytes();
 
                 match (
@@ -311,29 +506,33 @@ where
                     header.strip_prefix(b"recipe="),
                 ) {
                     (true, Some(value)) => Ok(value),
-                    _ => Err((
-                        StatusCode::EXPECTATION_FAILED,
-                        Json(Value::from(format!(
-                            r#"missing "recipe=" prefix: {}"#,
-                            String::from_utf8_lossy(header)
-                        ))),
-                    )),
+                    _ => {
+                        tracing::warn!(r#"cookie header present but missing "recipe=" prefix"#);
+                        Err((
+                            StatusCode::EXPECTATION_FAILED,
+                            format!(
+                                r#"missing "recipe=" prefix: {}"#,
+                                String::from_utf8_lossy(header)
+                            ),
+                        ))
+                    }
                 }
             })
             .and_then(|encoded| {
                 base64::STANDARD.decode(encoded).map_err(|error| {
-                    (
-                        StatusCode::EXPECTATION_FAILED,
-                        Json(Value::from(error.to_string())),
-                    )
+                    let error = error.to_string();
+
+                    tracing::warn!("un-decodable cookie header: {}", &error);
+                    (StatusCode::EXPECTATION_FAILED, error)
                 })
             })
             .and_then(|decoded| {
                 serde_json::from_slice::<Recipe>(decoded.as_slice()).map_err(|error| {
-                    (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(Value::from(error.to_string())),
-                    )
+                    let error = error.to_string();
+
+                    tracing::warn!("un-decodable cookie header: {}", &error);
+
+                    (StatusCode::UNPROCESSABLE_ENTITY, error)
                 })
             })
             .map(Self)
@@ -424,70 +623,89 @@ impl ReindeerStats {
     /// Summarize the supplied reindeer stats
     #[must_use]
     pub fn summarize(stats: &[Self]) -> HashMap<String, String> {
-        let mut widest: i64 = 0;
-        let mut fastest: f64 = 0.0;
-        let mut tallest: i64 = 0;
-        let mut consumed: i64 = 0;
-        let mut strongest: i64 = 0;
-        let mut magic_power: i64 = 0;
-
-        let mut summary: HashMap<String, String> = HashMap::new();
+        let (mut fastest, mut tallest, mut consumer, mut magician) = (
+            Option::<&Self>::None,
+            Option::<&Self>::None,
+            Option::<&Self>::None,
+            Option::<&Self>::None,
+        );
 
         for reindeer in stats {
-            if reindeer.speed > fastest {
-                fastest = reindeer.speed;
-                summary
-                    .entry("fastest".into())
-                    .or_insert_with(|| reindeer.name.clone());
+            if fastest
+                .map(|deer| deer.speed < reindeer.speed)
+                .unwrap_or(true)
+            {
+                fastest = Some(reindeer);
             }
 
-            if reindeer.height > tallest {
-                tallest = reindeer.height;
-                summary
-                    .entry("tallest".into())
-                    .or_insert_with(|| reindeer.name.clone());
+            if tallest
+                .map(|deer| deer.height < reindeer.height)
+                .unwrap_or(true)
+            {
+                tallest = Some(reindeer);
             }
 
-            if reindeer.strength > strongest {
-                strongest = reindeer.strength;
-                summary
-                    .entry("strongest".into())
-                    .or_insert_with(|| reindeer.name.clone());
+            if consumer
+                .map(|deer| deer.candies_eaten_yesterday < reindeer.candies_eaten_yesterday)
+                .unwrap_or(true)
+            {
+                consumer = Some(reindeer);
             }
 
-            if reindeer.antler_width > widest {
-                widest = reindeer.antler_width;
-                summary
-                    .entry("widest".into())
-                    .or_insert_with(|| reindeer.name.clone());
-            }
-
-            if reindeer.snow_magic_power > magic_power {
-                magic_power = reindeer.snow_magic_power;
-                summary
-                    .entry("magician".into())
-                    .or_insert_with(|| reindeer.name.clone());
-            }
-
-            if reindeer.candies_eaten_yesterday > consumed {
-                consumed = reindeer.candies_eaten_yesterday;
-                summary
-                    .entry("consumer".into())
-                    .or_insert_with(|| reindeer.name.clone());
+            if magician
+                .map(|deer| deer.snow_magic_power < reindeer.snow_magic_power)
+                .unwrap_or(true)
+            {
+                magician = Some(reindeer);
             }
         }
 
-        for (key, value) in &mut summary {
-            *value = match key.as_str() {
-                "tallest" => format!("{value} is standing tall at {tallest} cm"),
-                "widest" => format!("{value} is the thiccest boi at {widest} cm"),
-                "magician" => format!("{value} could blast you away with a snow magic power of {fastest}"),
-                "fastest" => format!("{value} absolutely guzzles Rust-Eze\u{2122} to maintain his speed rating of {fastest}"),
-                "consumer" => format!("{value} is an absolute slut for candy and consumed {consumed} pieces of it yesterday"),
-                "strongest" => format!("{value} is the strongest reindeer around with an impressive strength rating of {strongest}"),
-                _ => value.clone(),
-            };
-        }
+        let summary = [
+            ("fastest", fastest),
+            ("tallest", tallest),
+            ("consumer", consumer),
+            ("magician", magician),
+        ]
+        .into_iter()
+        .filter_map(|(key, reindeer)| {
+            if let Some(deer) = reindeer {
+                let key = key.to_string();
+                match key.as_str() {
+                    "consumer" => Some((
+                        key,
+                        format!(
+                            "{} ate lots of candies, but also some {}",
+                            deer.name, deer.favorite_food
+                        ),
+                    )),
+                    "tallest" => Some((
+                        key,
+                        format!(
+                            "{} is standing tall with his {} cm wide antlers",
+                            deer.name, deer.antler_width
+                        ),
+                    )),
+                    "fastest" => Some((
+                        key,
+                        format!(
+                            "Speeding past the finish line with a strength of {} is {}",
+                            deer.strength, deer.name
+                        ),
+                    )),
+                    "magician" => Some((
+                        key,
+                        format!(
+                            "{} could blast you away with a snow magic power of {}",
+                            deer.name, deer.snow_magic_power
+                        ),
+                    )),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<String, String>>();
 
         summary
     }
@@ -499,47 +717,150 @@ impl ReindeerStats {
 
 /// Custom struct for responding to elf/shelf count
 /// requests for [Day 6](https://console.shuttle.rs/cch/challenge/6)
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ElfShelfCountSummary {
     /// The count of how many times the literal
     /// string "elf" appears in the source text
     #[serde(alias = "elf")]
     #[serde(rename(serialize = "elf"))]
-    pub elves: u64,
+    pub loose_elves: u64,
     /// The count of how many times the literal string
     /// "elf on a shelf" appears in the source text
     #[serde(default)]
     #[serde(alias = "elf on a shelf")]
-    #[serde(skip_serializing_if = "is_zero")]
     #[serde(rename(serialize = "elf on a shelf"))]
     pub shelved_elves: u64,
     /// The number of shelves that don't have an elf on them -
     /// that is, the number of strings "shelf" that are not
     /// preceded by the string "elf on a ".
     #[serde(default)]
-    #[serde(skip_serializing_if = "is_zero")]
     #[serde(alias = "shelf with no elf on it")]
     #[serde(rename(serialize = "shelf with no elf on it"))]
-    pub shelves: u64,
+    pub bare_shelves: u64,
 }
 
 impl<T: AsRef<str>> From<T> for ElfShelfCountSummary {
-    fn from(value: T) -> Self {
-        let value = value.as_ref().nfkd().to_string();
-        let shelved = value.replace("elf on a shelf", "\u{0}");
+    fn from(text: T) -> Self {
+        let text = text.as_ref();
 
-        let elves =
-            u64::from_usize(value.replace("elf", UFFFD).matches(UFFFD).count()).unwrap_or(u64::MAX);
-        let bare_shelves = u64::from_usize(shelved.replace("shelf", UFFFD).matches(UFFFD).count())
-            .unwrap_or(u64::MAX);
-        let shelved_elves = u64::from_usize(shelved.matches('\u{0}').count()).unwrap_or(u64::MAX);
+        // - The count of how many times the literal
+        //   string "elf" appears in the source text
+        // - The count of how many times the literal string
+        //   "elf on a shelf" appears in the source text
+        // - The number of shelves that don't have an elf on them -
+        //   that is, the number of strings "shelf" that are not
+        //   preceded by the string "elf on a ".
 
-        Self {
-            elves,
-            shelves: bare_shelves,
-            shelved_elves,
+        let mut summary = Self::default();
+
+        for idx in 0..text.len() {
+            match &text[idx..] {
+                segment if segment.starts_with("elf on a shelf") => {
+                    // that's one loose elf
+                    summary.loose_elves += 1;
+                    // and one shelved elf
+                    summary.shelved_elves += 1;
+                }
+                segment if segment.starts_with("elf") => {
+                    summary.loose_elves += 1;
+                }
+                segment if segment.starts_with("shelf") => {
+                    summary.bare_shelves += 1;
+                }
+                _ => (),
+            }
         }
+
+        // Adjust the count of shelves to exclude shelves with an elf
+        summary.bare_shelves = u64::saturating_sub(summary.bare_shelves, summary.shelved_elves);
+
+        summary
     }
 }
 
 // </editor-fold desc="// ElfShelfCountSummary ...">
+
+// <editor-fold desc="// GiftOrder ...">
+
+// id INT PRIMARY KEY,
+// gift_name VARCHAR(50),
+// quantity INT,
+// region_id INT
+
+/// A gift order
+#[cfg_attr(test, derive(Eq, PartialEq))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct GiftOrder {
+    /// the order's sequential id
+    pub id: u64,
+    /// how many `{gift_name}`s were ordered
+    pub quantity: u64,
+    /// the gift's elf-readable name
+    pub gift_name: String,
+    /// the region to which the
+    /// gift must be delivered
+    pub region_id: u64,
+}
+
+impl GiftOrder {
+    /// ...
+    pub async fn insert(&self, db: &sqlx::PgPool) -> Result<PgQueryResult, DbError> {
+        Self::insert_many([self].into_iter(), db).await
+    }
+
+    /// ...
+    pub async fn insert_many<'orders, Orders: Iterator<Item = &'orders Self>>(
+        orders: Orders,
+        db: &sqlx::PgPool,
+    ) -> Result<PgQueryResult, DbError> {
+        sqlx::QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO ORDERS (id, quantity, gift_name, region_id) ",
+        )
+        .push_values(orders, |mut builder, order| {
+            builder
+                .push_bind(order.id as i64)
+                .push_bind(order.quantity as i64)
+                .push_bind(order.gift_name.clone())
+                .push_bind(order.region_id as i64);
+        })
+        .build()
+        .execute(db)
+        .await
+    }
+
+    /// ...
+    pub async fn total_ordered(db: &sqlx::PgPool) -> Result<u64, DbError> {
+        sqlx::query_scalar::<_, i64>("SELECT SUM(quantity) FROM orders")
+            .fetch_one(db)
+            .await
+            .and_then(|count| {
+                u64::from_i64(count).ok_or(DbError::Decode(
+                    anyhow::anyhow!("bad count value: {count}").into(),
+                ))
+            })
+    }
+
+    /// ...
+    pub async fn most_popular(db: &sqlx::PgPool) -> Result<Option<(String, i64)>, DbError> {
+        sqlx::query_as(
+            r#"
+            SELECT
+                gift_name,
+                SUM(quantity) as popularity
+            FROM
+                orders
+            GROUP BY
+                gift_name
+            ORDER BY
+                popularity
+            DESC
+            LIMIT 1
+        "#,
+        )
+        .fetch_optional(db)
+        .await
+    }
+}
+
+// <editor-fold desc="// GiftOrder ...">

@@ -29,7 +29,7 @@ pub fn is_magic_red(data: (u32, u32, image_rs::Rgba<u8>)) -> bool {
 
 /// TODO
 #[tracing::instrument(ret)]
-pub async fn fetch_pokemon_weight(pokedex_id: u16) -> anyhow::Result<u32, (StatusCode, String)> {
+pub async fn fetch_pokemon_weight(pokedex_id: u16) -> anyhow::Result<f64, (StatusCode, String)> {
     reqwest::get(format!("https://pokeapi.co/api/v2/pokemon/{pokedex_id}"))
         .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
         .and_then(|response: reqwest::Response| async move {
@@ -52,14 +52,6 @@ pub async fn fetch_pokemon_weight(pokedex_id: u16) -> anyhow::Result<u32, (Statu
                 ),
             ))
         })
-        .and_then(|value: Value| value.as_u64().ok_or((StatusCode::NOT_FOUND, String::new())))
-        .and_then(|value| {
-            u32::try_from(value).map_err(|error| {
-                (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("cannot downcast {value} to u32: {error}"),
-                )
-            })
-        })
-        .map(|value| value.div(10u32))
+        .and_then(|value: Value| value.as_f64().ok_or((StatusCode::NOT_FOUND, String::new())))
+        .map(|value| value.div(10f64))
 }
