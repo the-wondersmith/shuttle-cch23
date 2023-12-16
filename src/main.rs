@@ -1,188 +1,113 @@
 #![forbid(unsafe_code)]
+#![feature(entry_insert, const_trait_impl)]
 #![cfg_attr(tarpaulin, feature(register_tool))]
 #![cfg_attr(tarpaulin, register_tool(tarpaulin))]
 #![cfg_attr(tarpaulin, feature(coverage_attribute))]
-#![deny(missing_docs, missing_debug_implementations)]
+#![deny(missing_debug_implementations)]
 
 //! # [`shuttle.rs`](https://shuttle.rs/) Christmas Code Hunt 2023
 //!
 
-// Standard Library Imports
-use core::ops::{Add, BitXor};
-use std::collections::HashMap;
-
-// Third-Party Imports
-use axum::{
-    extract::{Json, Path},
-    http::StatusCode,
-    response::IntoResponse,
-    routing,
-};
-use serde_json::Value;
-
 // Module Declarations
+pub mod solutions;
 #[cfg(test)]
 mod tests;
-
 pub mod types;
 pub mod utils;
+
+// Third-Party Imports
+use axum::routing::{self, Router as AxumRouter};
+use shuttle_axum::ShuttleAxum as ShuttleAxumApp;
+use shuttle_persist::{Persist, PersistInstance as Persistence};
+use shuttle_secrets::{SecretStore, Secrets};
+use shuttle_shared_db::Postgres as PgDb;
+
+// Crate-Level Imports
+use crate::types::ShuttleAppState;
 
 /// Run the project
 #[cfg_attr(tarpaulin, coverage(off))]
 #[cfg_attr(tarpaulin, tarpaulin::skip)]
-#[tracing::instrument]
+#[tracing::instrument(skip_all)]
 #[shuttle_runtime::main]
-async fn main() -> shuttle_axum::ShuttleAxum {
-    Ok(router().into())
+async fn main(
+    #[PgDb] pool: sqlx::PgPool,
+    #[Secrets] secrets: SecretStore,
+    #[Persist] persistence: Persistence,
+) -> ShuttleAxumApp {
+    let state = ShuttleAppState::initialize(pool, Some(secrets), None, Some(persistence))?;
+
+    Ok(router(state).into())
 }
 
 /// Create the project's main `Router` instance
-#[tracing::instrument]
-pub fn router() -> routing::Router {
+#[tracing::instrument(skip(state))]
+pub fn router(state: ShuttleAppState) -> AxumRouter {
     routing::Router::new()
-        .route("/", routing::get(hello_world))
-        .route("/-1/error", routing::get(throw_error))
-        .route("/1/*packets", routing::get(calculate_sled_id))
-        .route("/4/contest", routing::post(summarize_reindeer_contest))
-        .route("/4/strength", routing::post(calculate_reindeer_strength))
-        .route("/6", routing::post(count_elves))
-        .route("/7/bake", routing::get(analyze_recipe).post(analyze_recipe))
-        .route("/7/decode", routing::get(decode_cookie).post(decode_cookie))
-        .route("/8/weight/:pokedex_id", routing::get(fetch_pokemon_weight))
+        .route("/", routing::get(solutions::hello_world))
+        .route("/-1/error", routing::get(solutions::throw_error))
+        .route("/1/*packets", routing::get(solutions::calculate_sled_id))
+        .route(
+            "/4/contest",
+            routing::post(solutions::summarize_reindeer_contest),
+        )
+        .route(
+            "/4/strength",
+            routing::post(solutions::calculate_reindeer_strength),
+        )
+        .route("/6", routing::post(solutions::count_elves))
+        .route(
+            "/7/bake",
+            routing::get(solutions::bake_cookies_from_recipe_and_pantry)
+                .post(solutions::bake_cookies_from_recipe_and_pantry),
+        )
+        .route(
+            "/7/decode",
+            routing::get(solutions::decode_cookie_recipe).post(solutions::decode_cookie_recipe),
+        )
+        .route(
+            "/8/weight/:pokedex_id",
+            routing::get(solutions::fetch_pokemon_weight),
+        )
         .route(
             "/8/drop/:pokedex_id",
-            routing::get(calculate_pokemon_impact_momentum),
+            routing::get(solutions::calculate_pokemon_impact_momentum),
         )
-}
-
-/// Complete [Challenge -1: Task](https://console.shuttle.rs/cch/challenge/-1#:~:text=⭐)
-#[tracing::instrument(ret)]
-pub async fn hello_world() -> &'static str {
-    "Hello Shuttle CCH 2023!"
-}
-
-/// Complete [Challenge -1: Bonus](https://console.shuttle.rs/cch/challenge/-1#:~:text=🎁)
-#[tracing::instrument(ret)]
-pub async fn throw_error() -> impl IntoResponse {
-    (StatusCode::INTERNAL_SERVER_ERROR, "Gimme them bonus points")
-}
-
-/// Complete [Challenge 1: Task](https://console.shuttle.rs/cch/challenge/1#:~:text=⭐)
-#[allow(dead_code)]
-#[cfg_attr(tarpaulin, coverage(off))]
-#[cfg_attr(tarpaulin, tarpaulin::skip)]
-#[tracing::instrument(ret)]
-pub async fn cube_the_bits(Path(values): Path<(u32, u32)>) -> Json<u32> {
-    Json(BitXor::bitxor(values.0, values.1).pow(3u32))
-}
-
-/// Complete [Challenge 1: Bonus](https://console.shuttle.rs/cch/challenge/1#:~:text=🎁)
-#[tracing::instrument(ret)]
-pub async fn calculate_sled_id(
-    types::VariadicPathValues(packets): types::VariadicPathValues,
-) -> Result<Json<i64>, types::NonNumericPacketIdResponse> {
-    let (mut packet_ids, mut invalid_packets) = (Vec::<Value>::new(), Vec::<Value>::new());
-
-    for value in packets {
-        if matches!(value, Value::Number(_)) {
-            packet_ids.push(value);
-        } else {
-            invalid_packets.push(value);
-        }
-    }
-
-    if invalid_packets.is_empty() {
-        Ok(Json(
-            packet_ids
-                .iter()
-                .filter_map(Value::as_i64)
-                .fold(0i64, BitXor::bitxor)
-                .pow(3u32),
-        ))
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            Json(HashMap::from([(
-                String::from("non-numeric packet ids"),
-                invalid_packets,
-            )])),
-        ))
-    }
-}
-
-/// Complete [Challenge 4: Task](https://console.shuttle.rs/cch/challenge/4#:~:text=⭐)
-#[tracing::instrument(ret)]
-pub async fn calculate_reindeer_strength(
-    Json(stats): Json<Vec<types::ReindeerStats>>,
-) -> Json<i64> {
-    Json(
-        stats
-            .iter()
-            .map(|reindeer| reindeer.strength)
-            .fold(0i64, i64::add),
-    )
-}
-
-/// Complete [Challenge 4: Bonus](https://console.shuttle.rs/cch/challenge/4#:~:text=🎁)
-#[tracing::instrument(ret)]
-pub async fn summarize_reindeer_contest(
-    Json(stats): Json<Vec<types::ReindeerStats>>,
-) -> Json<HashMap<String, String>> {
-    Json(types::ReindeerStats::summarize(&stats))
-}
-
-/// Complete [Challenge 6: Task + Bonus](https://console.shuttle.rs/cch/challenge/6#:~:text=🎄)
-#[tracing::instrument(ret)]
-pub async fn count_elves(text: String) -> Json<types::ElfShelfCountSummary> {
-    Json(types::ElfShelfCountSummary::from(text))
-}
-
-/// Complete [Challenge 7: Task](https://console.shuttle.rs/cch/challenge/7#:~:text=⭐)
-#[tracing::instrument(ret)]
-pub async fn decode_cookie(
-    types::CookieRecipeHeader(recipe): types::CookieRecipeHeader<Value>,
-) -> Json<Value> {
-    Json(recipe)
-}
-
-/// Complete [Challenge 7: Task](https://console.shuttle.rs/cch/challenge/7#:~:text=🎁)
-#[tracing::instrument(ret)]
-pub async fn analyze_recipe(
-    types::CookieRecipeHeader(data): types::CookieRecipeHeader<types::CookieRecipeInventory>,
-) -> Result<Json<types::CookieRecipeInventory>, types::EmptyRecipeOrPantryResponse> {
-    if data.cookies != 0 || data.recipe.is_empty() || data.pantry.is_empty() {
-        Err((StatusCode::UNPROCESSABLE_ENTITY, Json(data)))
-    } else {
-        Ok(Json(data.bake()))
-    }
-}
-
-/// Complete [Challenge 8: Task](https://console.shuttle.rs/cch/challenge/8#:~:text=⭐)
-#[tracing::instrument(ret)]
-pub async fn fetch_pokemon_weight(
-    Path(pokedex_id): Path<u16>,
-) -> Result<Json<u32>, (StatusCode, String)> {
-    Ok(Json(utils::fetch_pokemon_weight(pokedex_id).await?))
-}
-
-/// Complete [Challenge 8: Task](https://console.shuttle.rs/cch/challenge/8#:~:text=🎁)
-#[allow(non_upper_case_globals)]
-#[tracing::instrument(ret)]
-pub async fn calculate_pokemon_impact_momentum(
-    Path(pokedex_id): Path<u16>,
-) -> Result<Json<f64>, (StatusCode, String)> {
-    /// Gravitational acceleration in m/s²
-    const gravity: f64 = 9.825;
-    /// Chimney height in meters
-    const drop_height: f64 = 10.0;
-
-    let poke_weight = utils::fetch_pokemon_weight(pokedex_id).await?;
-
-    // Calculate the final speed with kinematic equation
-    let final_speed = (2.0 * gravity * drop_height).sqrt();
-
-    // Calculate the impact momentum
-    let momentum = f64::from(poke_weight) * final_speed;
-
-    Ok(Json(momentum))
+        .route(
+            "/11/assets/:asset",
+            routing::get(solutions::serve_static_asset),
+        )
+        .route(
+            "/11/red_pixels",
+            routing::post(solutions::calculate_magical_red_pixel_count),
+        )
+        .route(
+            "/12/save/:packet_it",
+            routing::post(solutions::store_packet_id_timestamp),
+        )
+        .route(
+            "/12/load/:packet_it",
+            routing::get(solutions::retrieve_packet_id_timestamp),
+        )
+        .route("/12/ulids", routing::post(solutions::santas_ulid_hug_box))
+        .route(
+            "/12/ulids/:weekday",
+            routing::post(solutions::analyze_ulids),
+        )
+        .route("/13/sql", routing::get(solutions::simple_sql_select))
+        .route("/13/reset", routing::post(solutions::reset_db_schema))
+        .route("/13/orders", routing::post(solutions::create_orders))
+        .route(
+            "/13/orders/total",
+            routing::get(solutions::total_order_count),
+        )
+        .route(
+            "/13/orders/popular",
+            routing::get(solutions::most_popular_gift),
+        )
+        .route("/14/safe", routing::post(solutions::render_html_safe))
+        .route("/14/unsafe", routing::post(solutions::render_html_unsafe))
+        .route("/15/nice", routing::post(solutions::assess_naughty_or_nice))
+        .route("/15/game", routing::post(solutions::game_of_the_year))
+        .with_state(state)
 }

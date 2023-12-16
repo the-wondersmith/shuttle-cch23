@@ -8,11 +8,28 @@ use std::collections::HashMap;
 // Third-Party Imports
 use axum::http::StatusCode;
 use futures::prelude::*;
+use image_rs::Pixel;
 use serde_json::Value;
+
+/// Determine if the supplied [`pixel`](image_rs::RGB)
+/// would be perceived as "magical red" when viewed with
+/// Santa's night vision goggles.
+///
+/// The goggles considers a pixel "magical red" if the
+/// color values of the pixel fulfill the formula:
+///
+/// > `blue + green < red`
+pub fn is_magic_red(data: (u32, u32, image_rs::Rgba<u8>)) -> bool {
+    let (_x, _y, rgba) = data;
+
+    let pixel = rgba.to_rgb();
+
+    u16::from(pixel[1]) + u16::from(pixel[2]) < u16::from(pixel[0])
+}
 
 /// TODO
 #[tracing::instrument(ret)]
-pub async fn fetch_pokemon_weight(pokedex_id: u16) -> anyhow::Result<u32, (StatusCode, String)> {
+pub async fn fetch_pokemon_weight(pokedex_id: u16) -> anyhow::Result<f64, (StatusCode, String)> {
     reqwest::get(format!("https://pokeapi.co/api/v2/pokemon/{pokedex_id}"))
         .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
         .and_then(|response: reqwest::Response| async move {
@@ -35,14 +52,6 @@ pub async fn fetch_pokemon_weight(pokedex_id: u16) -> anyhow::Result<u32, (Statu
                 ),
             ))
         })
-        .and_then(|value: Value| value.as_u64().ok_or((StatusCode::NOT_FOUND, String::new())))
-        .and_then(|value| {
-            u32::try_from(value).map_err(|error| {
-                (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("cannot downcast {value} to u32: {error}"),
-                )
-            })
-        })
-        .map(|value| value.div(10u32))
+        .and_then(|value: Value| value.as_f64().ok_or((StatusCode::NOT_FOUND, String::new())))
+        .map(|value| value.div(10f64))
 }

@@ -17,14 +17,20 @@ use axum::{
     routing::Router,
 };
 
+use crate::types::PantryInventory;
 use once_cell::sync::Lazy;
 use pretty_assertions::{assert_eq, assert_ne, assert_str_eq};
 use rstest::{fixture, rstest};
 use serde_json::{error::Error as SerdeJsonError, Value};
+use shuttle_shared_db::Postgres as ShuttleDB;
 use tower::{MakeService, ServiceExt};
 
 // Crate-Level Imports
-use super::{calculate_sled_id, cube_the_bits, hello_world, router, throw_error, types};
+use super::{
+    router,
+    solutions::{calculate_sled_id, cube_the_bits, hello_world, throw_error},
+    types,
+};
 
 // <editor-fold desc="// Types ...">
 
@@ -216,7 +222,10 @@ struct TestService(Router);
 
 impl Default for TestService {
     fn default() -> Self {
-        Self(router())
+        // let db = ShuttleDB::new();
+        // let state = types::ShuttleAppState::initialize(None, None, None);
+        // Self(router(state))
+        todo!()
     }
 }
 
@@ -515,43 +524,99 @@ async fn test_challenge_five() {
 /// [CCH 2023 Challenge 6](https://console.shuttle.rs/cch/challenge/6)
 #[rstest]
 #[case::challenge_example(
-    Body::from(
-        "\
-          The mischievous elf peeked out from \
-          behind the toy workshop, and another \
-          elf joined in the festive dance. Look, \
-          there is also an elf on that shelf!\
-        "
-    ),
+    "The mischievous elf peeked out from \
+     behind the toy workshop, and another \
+     elf joined in the festive dance. Look, \
+     there is also an elf on that shelf! \
+    ",
     StatusCode::OK,
     types::ElfShelfCountSummary {
-        elves: 4u64,
-        shelves: 1u64,
+        loose_elves: 4u64,
+        bare_shelves: 1u64,
         shelved_elves: 0u64,
     },
 )]
-#[case::bonus_example(
-    Body::from(
-        "\
-          there is an elf on a shelf on an elf. \
-          there is also another shelf in Belfast.\
-        "
-    ),
+#[case::bonus_example1(
+    "there is an elf on a shelf on an elf. \
+     there is also another shelf in Belfast. \
+    ",
     StatusCode::OK,
     types::ElfShelfCountSummary {
-        elves: 5u64,
-        shelves: 1u64,
+        loose_elves: 5u64,
+        bare_shelves: 1u64,
         shelved_elves: 1u64,
-    }
+    },
+)]
+#[case::bonus_example2(
+    "elf elf elf",
+    StatusCode::OK,
+    types::ElfShelfCountSummary {
+        loose_elves: 3u64,
+        bare_shelves: 0u64,
+        shelved_elves: 0u64,
+    },
+)]
+#[case::bonus_example3(
+    "In the quirky town of Elf stood an enchanting \
+     shop named 'The Elf & Shelf.' Managed \
+     by Wally, a mischievous elf with a knack \
+     for crafting exquisite shelves, the \
+     shop was a bustling hub of elf after \
+     elf who wanted to see their dear elf \
+     in Belfast. \
+    ",
+    StatusCode::OK,
+    types::ElfShelfCountSummary {
+        loose_elves: 6u64,
+        bare_shelves: 0u64,
+        shelved_elves: 0u64,
+    },
+)]
+#[case::bonus_example4(
+    "elf elf elf on a shelf",
+    StatusCode::OK,
+    types::ElfShelfCountSummary {
+        loose_elves: 4u64,
+        bare_shelves: 0u64,
+        shelved_elves: 1u64,
+    },
+)]
+#[case::bonus_example5(
+    "In Belfast I heard an elf on a shelf \
+     on a shelf on a \
+    ",
+    StatusCode::OK,
+    types::ElfShelfCountSummary {
+        loose_elves: 4u64,
+        bare_shelves: 0u64,
+        shelved_elves: 2u64,
+    },
+)]
+#[case::bonus_example6(
+    "Somewhere in Belfast under a shelf store \
+     but above the shelf realm there's an \
+     elf on a shelf on a shelf on a shelf \
+     on a elf on a shelf on a shelf on a \
+     shelf on a shelf on a elf on a elf on \
+     a elf on a shelf on a \
+    ",
+    StatusCode::OK,
+    types::ElfShelfCountSummary {
+        loose_elves: 16u64,
+        bare_shelves: 2u64,
+        shelved_elves: 8u64,
+    },
 )]
 #[test_log::test(tokio::test)]
 async fn test_challenge_six(
     service: TestService,
-    #[case] body: Body,
+    #[case] text: &str,
     #[case] expected_status: StatusCode,
     #[case] expected_summary: types::ElfShelfCountSummary,
 ) -> anyhow::Result<()> {
-    let response = service.resolve(Request::post("/6").body(body)?).await?;
+    let response = service
+        .resolve(Request::post("/6").body(Body::from(text.as_bytes().to_vec()))?)
+        .await?;
 
     assert_eq!(
         expected_status,
@@ -564,7 +629,13 @@ async fn test_challenge_six(
     let summary: types::ElfShelfCountSummary =
         serde_json::from_slice(response.into_body().data().await.unwrap()?.as_ref())?;
 
-    Ok(assert_eq!(expected_summary, summary))
+    assert_eq!(
+        &expected_summary, &summary,
+        r#"{{"actual": {:?}, "expected": {:?}, "text": "{text}"}}"#,
+        summary, expected_summary
+    );
+
+    Ok(())
 }
 
 /// Test that `decode_cookie` and `analyze_recipe` satisfy the conditions of
