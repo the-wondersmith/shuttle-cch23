@@ -26,7 +26,11 @@ use shuttle_shared_db::Postgres as ShuttleDB;
 use tower::{MakeService, ServiceExt};
 
 // Crate-Level Imports
-use super::{calculate_sled_id, cube_the_bits, hello_world, router, throw_error, types};
+use super::{
+    router,
+    solutions::{calculate_sled_id, cube_the_bits, hello_world, throw_error},
+    types,
+};
 
 // <editor-fold desc="// Types ...">
 

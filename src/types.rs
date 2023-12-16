@@ -10,20 +10,27 @@ use core::{
     ops::{Deref, DerefMut, Not, Sub, SubAssign},
 };
 use std::{
+    boxed::Box,
     collections::{BTreeMap, HashMap},
     env::{set_var as set_env_var, temp_dir, var as get_env_var},
-    path::PathBuf,
+    path::PathBuf as FilePathBuf,
 };
 
 // Third-Party Imports
 use axum::http::StatusCode;
 use axum::{
     async_trait,
-    extract::{rejection::PathRejection, FromRequestParts, Path},
+    extract::{rejection::PathRejection, FromRef, FromRequestParts, Path},
     http::{header::COOKIE, request::Parts},
     Json,
 };
+#[allow(unused_imports)]
+use axum_template::{
+    engine::{Engine as HandlebarsEngine, HandlebarsError},
+    Key, RenderHtml,
+};
 use b64::{engine::general_purpose as base64, Engine};
+use handlebars::{Handlebars, TemplateError};
 use itertools::Itertools;
 use num_traits::cast::FromPrimitive;
 use serde::{de::DeserializeOwned, ser::Error, Deserialize, Serialize};
@@ -32,9 +39,8 @@ use shuttle_persist::{PersistError as PersistenceError, PersistInstance as Persi
 use shuttle_secrets::SecretStore;
 use sqlx::{error::Error as DbError, postgres::PgQueryResult};
 
-/// TODO(the-wondersmith): documentation
+pub(super) type TemplateEngine = HandlebarsEngine<Handlebars<'static>>;
 pub(super) type RecipeAnalysisResponse = (StatusCode, Json<CookieRecipeInventory>);
-/// TODO(the-wondersmith): documentation
 pub(super) type NonNumericPacketIdResponse = (StatusCode, Json<HashMap<String, Vec<Value>>>);
 
 /// Determine if the supplied value
@@ -47,11 +53,14 @@ fn is_zero<T: Display>(value: T) -> bool {
 // <editor-fold desc="// ShuttleAppState ...">
 
 /// The service's "shared" state
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, FromRef)]
 pub struct ShuttleAppState {
     /// A pool of connections to the
     /// service's PostgreSQL database
     pub db: sqlx::PgPool,
+    /// A pre-configured Handlebars
+    /// templating engine instance
+    pub templates: TemplateEngine,
     /// The service's instance-independent
     /// persistent key-value store
     pub persistence: Persistence,
@@ -64,16 +73,26 @@ impl ShuttleAppState {
     pub fn initialize(
         db: sqlx::PgPool,
         secrets: Option<SecretStore>,
+        templates: Option<TemplateEngine>,
         persistence: Option<Persistence>,
     ) -> anyhow::Result<Self> {
         Self::_initialize_secrets(secrets);
+
+        let templates = templates.map_or_else(
+            Self::_default_template_engine,
+            Result::<TemplateEngine, Box<TemplateError>>::Ok,
+        )?;
 
         let persistence = persistence.map_or_else(
             Self::_default_persistence,
             Result::<Persistence, PersistenceError>::Ok,
         )?;
 
-        Ok(Self { db, persistence })
+        Ok(Self {
+            db,
+            templates,
+            persistence,
+        })
     }
 
     #[cfg_attr(tarpaulin, coverage(off))]
@@ -81,6 +100,25 @@ impl ShuttleAppState {
     fn _default_secrets() -> SecretStore {
         SecretStore::new(BTreeMap::new())
     }
+
+    #[cfg_attr(tarpaulin, coverage(off))]
+    #[cfg_attr(tarpaulin, tarpaulin::skip)]
+    fn _default_template_engine() -> Result<TemplateEngine, Box<TemplateError>> {
+        let mut engine = Handlebars::new();
+
+        if get_env_var("SHUTTLE").is_ok_and(|value| &value == "true") {
+            engine.set_dev_mode(true);
+        }
+
+        engine
+            .register_templates_directory(
+                ".tpl",
+                FilePathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets")),
+            )
+            .map_err(Box::from)
+            .map(|_| TemplateEngine::from(engine))
+    }
+
     fn _initialize_secrets(secrets: Option<SecretStore>) -> SecretStore {
         let secrets = secrets.unwrap_or_else(Self::_default_secrets);
 
@@ -101,7 +139,7 @@ impl ShuttleAppState {
             .ok()
             .map_or_else(
                 || temp_dir().join("shuttle-cch23").join("persistence"),
-                PathBuf::from,
+                FilePathBuf::from,
             )
             .canonicalize()
             .map_err(PersistenceError::CreateFolder)?;
@@ -783,11 +821,6 @@ impl<T: AsRef<str>> From<T> for ElfShelfCountSummary {
 
 // <editor-fold desc="// GiftOrder ...">
 
-// id INT PRIMARY KEY,
-// gift_name VARCHAR(50),
-// quantity INT,
-// region_id INT
-
 /// A gift order
 #[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -863,4 +896,4 @@ impl GiftOrder {
     }
 }
 
-// <editor-fold desc="// GiftOrder ...">
+// </editor-fold desc="// GiftOrder ...">
