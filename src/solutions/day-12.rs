@@ -13,7 +13,7 @@ use chrono::{DateTime, Datelike, Utc};
 use serde_json::{Map as JsonObject, Value};
 
 // Crate-Level Imports
-use crate::types::ShuttleAppState;
+use crate::state::ShuttleAppState;
 
 /// Endpoint 1/2 for [Day 12: Challenge](https://console.shuttle.rs/cch/challenge/12#:~:text=⭐)
 #[tracing::instrument(ret, skip(state), fields(new, old))]
@@ -100,4 +100,35 @@ pub async fn analyze_ulids(
         ]
         .into_iter(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    //! ## I/O-free Unit Tests
+
+    #![allow(unused_imports, clippy::unit_arg)]
+
+    // Standard Library Imports
+    use core::{cmp::PartialEq, fmt::Debug, ops::BitOr, str::FromStr};
+    use std::collections::HashMap;
+
+    // Third-Party Imports
+    use axum::{
+        body::{Body, BoxBody, HttpBody},
+        http::{
+            header as headers,
+            request::{Builder, Parts},
+            Method, Request, Response, StatusCode,
+        },
+        routing::Router,
+    };
+    use once_cell::sync::Lazy;
+    use pretty_assertions::{assert_eq, assert_ne, assert_str_eq};
+    use rstest::{fixture, rstest};
+    use serde_json::{error::Error as SerdeJsonError, Value};
+    use shuttle_shared_db::Postgres as ShuttleDB;
+    use tower::{MakeService, ServiceExt};
+
+    // Crate-Level Imports
+    use crate::utils::{service, TestService};
 }

@@ -10,9 +10,7 @@
 
 // Module Declarations
 pub mod solutions;
-#[cfg(test)]
-mod tests;
-pub mod types;
+pub mod state;
 pub mod utils;
 
 // Third-Party Imports
@@ -23,7 +21,7 @@ use shuttle_secrets::{SecretStore, Secrets};
 use shuttle_shared_db::Postgres as PgDb;
 
 // Crate-Level Imports
-use crate::types::ShuttleAppState;
+use crate::state::ShuttleAppState;
 
 /// Run the project
 #[cfg_attr(tarpaulin, coverage(off))]
@@ -95,7 +93,7 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
             routing::post(solutions::analyze_ulids),
         )
         .route("/13/sql", routing::get(solutions::simple_sql_select))
-        .route("/13/reset", routing::post(solutions::reset_db_schema))
+        .route("/13/reset", routing::post(solutions::reset_day_13_schema))
         .route("/13/orders", routing::post(solutions::create_orders))
         .route(
             "/13/orders/total",
@@ -109,5 +107,16 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
         .route("/14/unsafe", routing::post(solutions::render_html_unsafe))
         .route("/15/nice", routing::post(solutions::assess_naughty_or_nice))
         .route("/15/game", routing::post(solutions::game_of_the_year))
+        .route("/18/reset", routing::post(solutions::reset_day_18_schema))
+        .route("/18/orders", routing::post(solutions::create_orders))
+        .route("/18/regions", routing::post(solutions::create_regions))
+        .route(
+            "/18/regions/total",
+            routing::get(solutions::get_order_count_by_region),
+        )
+        .route(
+            "/18/regions/top_list/:number",
+            routing::get(solutions::get_top_n_gifts_by_region),
+        )
         .with_state(state)
 }
