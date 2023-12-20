@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
-#![feature(entry_insert, const_trait_impl)]
+#![deny(missing_debug_implementations)]
 #![cfg_attr(tarpaulin, feature(register_tool))]
 #![cfg_attr(tarpaulin, register_tool(tarpaulin))]
 #![cfg_attr(tarpaulin, feature(coverage_attribute))]
-#![deny(missing_debug_implementations)]
+#![feature(entry_insert, const_trait_impl, try_trait_v2)]
 
 //! # [`shuttle.rs`](https://shuttle.rs/) Christmas Code Hunt 2023
 //!
@@ -117,6 +117,16 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
         .route(
             "/18/regions/top_list/:number",
             routing::get(solutions::get_top_n_gifts_by_region),
+        )
+        .route(
+            "/19/ws/ping",
+            routing::get(solutions::play_socket_ping_pong),
+        )
+        .route("/19/reset", routing::post(solutions::reset_chat_count))
+        .route("/19/views", routing::get(solutions::get_current_chat_count))
+        .route(
+            "/19/ws/room/:room/user/:user",
+            routing::get(solutions::connect_to_chat_room),
         )
         .with_state(state)
 }

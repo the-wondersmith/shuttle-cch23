@@ -1,54 +1,18 @@
-#![allow(unused_imports)]
 //! ### CCH 2023 Day 18 Solutions
 //!
 
-// Standard Library Imports
-use core::ops::{Add, BitAnd, BitXor, Sub};
-use std::collections::HashMap;
-use std::ops::BitOr;
-
 // Third-Party Imports
 use axum::{
-    body::Body,
-    extract::{multipart::Multipart, Json, Path, State},
-    http::{Request, StatusCode},
-    response::IntoResponse,
-    routing,
+    extract::{Json, Path, State},
+    http::StatusCode,
 };
-use axum_template::TemplateEngine;
-use chrono::{DateTime, Datelike, Utc};
 use futures::prelude::*;
-use image_rs::GenericImageView;
-use itertools::Itertools;
-use num_traits::cast::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonObject, Value};
-use shuttle_persist::{Persist, PersistInstance as Persistence};
-use shuttle_secrets::{SecretStore, Secrets};
-use shuttle_shared_db::Postgres as PgDb;
 use sqlx::{error::Error as DbError, postgres::PgQueryResult, FromRow};
-use tower::ServiceExt;
-use tower_http::services::ServeFile;
-use unicode_normalization::UnicodeNormalization;
 
 // Crate-Level Imports
-use crate::solutions::day_13::GiftOrder;
 use crate::state::ShuttleAppState;
-use crate::{state, utils};
-
-/// A summary of gift order totals for a
-/// given geographical region
-#[cfg_attr(test, derive(Eq, PartialEq))]
-#[derive(Debug, Default, FromRow, Serialize, Deserialize)]
-pub struct RegionalOrderTotal {
-    /// the region's elf-readable name
-    #[sqlx(rename = "name")]
-    pub region: String,
-    /// the total number of the region's
-    /// associated gift orders
-    #[serde(rename = "total")]
-    pub total_orders: i64,
-}
 
 // <editor-fold desc="// RegionalTopGifts ...">
 
@@ -65,6 +29,24 @@ pub struct RegionalTopGifts {
 }
 
 // </editor-fold desc="// RegionalTopGifts ...">
+
+// <editor-fold desc="// RegionalOrderTotal ...">
+
+/// A summary of gift order totals for a
+/// given geographical region
+#[cfg_attr(test, derive(Eq, PartialEq))]
+#[derive(Debug, Default, FromRow, Serialize, Deserialize)]
+pub struct RegionalOrderTotal {
+    /// the region's elf-readable name
+    #[sqlx(rename = "name")]
+    pub region: String,
+    /// the total number of the region's
+    /// associated gift orders
+    #[serde(rename = "total")]
+    pub total_orders: i64,
+}
+
+// </editor-fold desc="// RegionalOrderTotal ...">
 
 // <editor-fold desc="// GiftOrderRegion ...">
 
