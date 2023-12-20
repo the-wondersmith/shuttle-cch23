@@ -87,7 +87,6 @@ mod test_utils {
     use tower::ServiceExt;
 
     // Crate-Level Imports
-    #[allow(unused_imports)]
     use crate::{router, state::ShuttleAppState};
 
     const TEST_DB_URL: &str = "postgres://postgres:postgres@localhost:19867/postgres";

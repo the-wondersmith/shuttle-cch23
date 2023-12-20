@@ -50,6 +50,10 @@ pub use self::{
     day_18::{
         create_regions, get_order_count_by_region, get_top_n_gifts_by_region, reset_day_18_schema,
     },
+    day_19::{
+        connect_to_chat_room, get_current_chat_count, play_socket_ping_pong, reset_chat_count,
+        ChatRoomState,
+    },
     day_4::{calculate_reindeer_strength, summarize_reindeer_contest},
     day_6::count_elves,
     day_7::{bake_cookies_from_recipe_and_pantry, decode_cookie_recipe},

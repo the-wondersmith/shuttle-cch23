@@ -8,6 +8,7 @@ use std::{
     collections::BTreeMap,
     env::{set_var as set_env_var, var as get_env_var},
     path::PathBuf as FilePathBuf,
+    sync::Arc,
 };
 
 // Third-Party Imports
@@ -22,6 +23,9 @@ use handlebars::{Handlebars, TemplateError};
 use shuttle_persist::{PersistError as PersistenceError, PersistInstance as Persistence};
 use shuttle_secrets::SecretStore;
 
+// Crate-Level Imports
+use crate::solutions::day_19::ChatRoomState;
+
 pub(super) type TemplateEngine = HandlebarsEngine<Handlebars<'static>>;
 
 // <editor-fold desc="// ShuttleAppState ...">
@@ -32,6 +36,8 @@ pub struct ShuttleAppState {
     /// A pool of connections to the
     /// service's PostgreSQL database
     pub db: sqlx::PgPool,
+    /// ...
+    pub chat: Arc<ChatRoomState>,
     /// A pre-configured Handlebars
     /// templating engine instance
     pub templates: TemplateEngine,
@@ -52,6 +58,8 @@ impl ShuttleAppState {
     ) -> anyhow::Result<Self> {
         Self::_initialize_secrets(secrets);
 
+        let chat = Arc::new(ChatRoomState::default());
+
         let templates = templates.map_or_else(
             Self::_default_template_engine,
             Result::<TemplateEngine, Box<TemplateError>>::Ok,
@@ -64,6 +72,7 @@ impl ShuttleAppState {
 
         Ok(Self {
             db,
+            chat,
             templates,
             persistence,
         })
