@@ -54,6 +54,7 @@ pub use self::{
         connect_to_chat_room, get_current_chat_count, play_socket_ping_pong, reset_chat_count,
         ChatRoomState,
     },
+    day_20::{get_archived_file_count, get_total_archived_file_size, git_blame_cookie_hunt},
     day_4::{calculate_reindeer_strength, summarize_reindeer_contest},
     day_6::count_elves,
     day_7::{bake_cookies_from_recipe_and_pantry, decode_cookie_recipe},
