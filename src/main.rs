@@ -3,7 +3,7 @@
 #![cfg_attr(tarpaulin, feature(register_tool))]
 #![cfg_attr(tarpaulin, register_tool(tarpaulin))]
 #![cfg_attr(tarpaulin, feature(coverage_attribute))]
-#![feature(entry_insert, const_trait_impl, try_trait_v2)]
+#![feature(entry_insert, error_in_core, const_trait_impl, try_trait_v2)]
 
 //! # [`shuttle.rs`](https://shuttle.rs/) Christmas Code Hunt 2023
 //!
@@ -127,6 +127,18 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
         .route(
             "/19/ws/room/:room/user/:user",
             routing::get(solutions::connect_to_chat_room),
+        )
+        .route(
+            "/20/archive_files",
+            routing::post(solutions::get_archived_file_count),
+        )
+        .route(
+            "/20/archive_files_size",
+            routing::post(solutions::get_total_archived_file_size),
+        )
+        .route(
+            "/20/cookie",
+            routing::post(solutions::git_blame_cookie_hunt),
         )
         .with_state(state)
 }
