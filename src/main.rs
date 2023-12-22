@@ -140,5 +140,13 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
             "/20/cookie",
             routing::post(solutions::git_blame_cookie_hunt),
         )
+        .route(
+            "/21/coords/:cell_id",
+            routing::get(solutions::resolve_s2_cell_center),
+        )
+        .route(
+            "/21/country/:cell_id",
+            routing::get(solutions::resolve_country_from_s2_cell),
+        )
         .with_state(state)
 }
