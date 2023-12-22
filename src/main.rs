@@ -53,6 +53,7 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
             "/4/strength",
             routing::post(solutions::calculate_reindeer_strength),
         )
+        .route("/5", routing::post(solutions::slice_the_loop))
         .route("/6", routing::post(solutions::count_elves))
         .route(
             "/7/bake",
