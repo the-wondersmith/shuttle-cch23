@@ -149,5 +149,7 @@ pub fn router(state: ShuttleAppState) -> AxumRouter {
             "/21/country/:cell_id",
             routing::get(solutions::resolve_country_from_s2_cell),
         )
+        .route("/22/integers", routing::post(solutions::locate_lonely_int))
+        .route("/22/rocket", routing::post(solutions::analyze_star_chart))
         .with_state(state)
 }
