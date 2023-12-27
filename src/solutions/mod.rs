@@ -56,6 +56,7 @@ pub use self::{
     },
     day_20::{get_archived_file_count, get_total_archived_file_size, git_blame_cookie_hunt},
     day_21::{resolve_country_from_s2_cell, resolve_s2_cell_center},
+    day_22::{analyze_star_chart, locate_lonely_int},
     day_4::{calculate_reindeer_strength, summarize_reindeer_contest},
     day_5::slice_the_loop,
     day_6::count_elves,
